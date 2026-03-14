@@ -1,0 +1,195 @@
+`timescale 1ns / 1ps
+
+module tb_firewall_top;
+
+
+//============================
+// Clock generation
+//============================
+reg clk = 0;
+always #41.66 clk = ~clk;   // 12 MHz clock
+
+
+//============================
+// UART lines
+//============================
+reg rx = 1;
+wire tx;
+
+
+//============================
+// LEDs
+//============================
+wire led_attack;
+wire led_normal;
+wire led_rx;
+
+
+//============================
+// DUT
+//============================
+firewall_top DUT(
+
+.clk(clk),
+.rx(rx),
+.tx(tx),
+.led_attack(led_attack),
+.led_normal(led_normal),
+.led_rx(led_rx)
+
+);
+
+
+// UART timing
+parameter CLKS_PER_BIT = 104;
+
+
+//================================
+// Send one UART byte
+//================================
+task send_byte;
+
+input [7:0] data;
+integer i;
+
+begin
+
+$display("Sending byte: %d",data);
+
+// start bit
+rx = 0;
+repeat(CLKS_PER_BIT) @(posedge clk);
+
+// data bits
+for(i=0;i<8;i=i+1) begin
+    rx = data[i];
+    repeat(CLKS_PER_BIT) @(posedge clk);
+end
+
+// stop bit
+rx = 1;
+repeat(CLKS_PER_BIT) @(posedge clk);
+
+end
+
+endtask
+
+
+
+//================================
+// Send 12-byte packet
+//================================
+task send_packet;
+
+input [7:0] proto;
+input [7:0] state;
+
+input [15:0] dur;
+input [15:0] sbytes;
+input [15:0] dbytes;
+input [15:0] spkts;
+input [15:0] dpkts;
+
+begin
+
+$display(" ");
+$display("========== PACKET ==========");
+$display("proto=%d state=%d dur=%d sbytes=%d dbytes=%d spkts=%d dpkts=%d",
+proto,state,dur,sbytes,dbytes,spkts,dpkts);
+
+send_byte(proto);
+send_byte(state);
+
+send_byte(dur[15:8]);
+send_byte(dur[7:0]);
+
+send_byte(sbytes[15:8]);
+send_byte(sbytes[7:0]);
+
+send_byte(dbytes[15:8]);
+send_byte(dbytes[7:0]);
+
+send_byte(spkts[15:8]);
+send_byte(spkts[7:0]);
+
+send_byte(dpkts[15:8]);
+send_byte(dpkts[7:0]);
+
+end
+
+endtask
+
+
+
+//================================
+// Monitor system signals
+//================================
+initial begin
+
+$display(" ");
+$display("========= SYSTEM MONITOR =========");
+
+$monitor(
+"TIME=%0t | proto=%d state=%d dur=%d sbytes=%d dbytes=%d spkts=%d dpkts=%d | attack=%d | LED_RX=%b LED_NORMAL=%b LED_ATTACK=%b | TX=%b",
+$time,
+DUT.proto,
+DUT.state,
+DUT.dur,
+DUT.sbytes,
+DUT.dbytes,
+DUT.spkts,
+DUT.dpkts,
+DUT.attack,
+led_rx,
+led_normal,
+led_attack,
+tx
+);
+
+end
+
+
+
+//================================
+// Test sequence
+//================================
+initial begin
+
+#1000;
+
+$display("===== FULL SYSTEM TEST =====");
+
+
+// NORMAL PATTERN 1
+send_packet(80,2,2,60,40,2,2);
+#200000;
+
+
+// NORMAL PATTERN 2
+send_packet(17,1,3,80,60,3,2);
+#200000;
+
+
+// DOS
+send_packet(6,2,1,200,900,300,200);
+#200000;
+
+
+// PORTSCAN
+send_packet(6,2,0,30,40,30,1);
+#200000;
+
+
+// BRUTEFORCE
+send_packet(6,6,20,100,120,15,20);
+#200000;
+
+
+$display("===== TEST COMPLETE =====");
+
+$finish;
+
+end
+
+
+endmodule
