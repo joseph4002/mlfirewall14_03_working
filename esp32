@@ -1,0 +1,350 @@
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <UniversalTelegramBot.h>
+#include <WebServer.h>
+#include "esp_wifi.h"
+
+#define RXD2 16
+#define TXD2 17
+
+// ==============================
+// Internet WiFi (for Telegram)
+// ==============================
+const char* internetSSID = "YOUR_PHONE_HOTSPOT";
+const char* internetPASS = "YOUR_PASSWORD";
+
+// ==============================
+// Firewall Router WiFi
+// ==============================
+const char* ssid = "FPGA_FIREWALL";
+const char* password = "12345678";
+
+// ==============================
+// Telegram Bot
+// ==============================
+#define BOT_TOKEN "8397598682:AAGFUnn952S7avft8IUyT9TmJjJ3IzQGwcI"
+#define CHAT_ID "5716252259"
+
+WiFiClientSecure client;
+UniversalTelegramBot bot(BOT_TOKEN, client);
+
+WebServer server(80);
+
+String result = "Waiting for packet...";
+IPAddress attackerIP;
+
+
+//================================
+// Send packet to FPGA
+//================================
+void sendPacket(
+uint8_t proto,
+uint8_t state,
+uint16_t dur,
+uint16_t sbytes,
+uint16_t dbytes,
+uint16_t spkts,
+uint16_t dpkts)
+{
+
+while(Serial2.available()) Serial2.read();
+
+Serial2.write(proto);
+Serial2.write(state);
+
+Serial2.write(dur >> 8);
+Serial2.write(dur);
+
+Serial2.write(sbytes >> 8);
+Serial2.write(sbytes);
+
+Serial2.write(dbytes >> 8);
+Serial2.write(dbytes);
+
+Serial2.write(spkts >> 8);
+Serial2.write(spkts);
+
+Serial2.write(dpkts >> 8);
+Serial2.write(dpkts);
+
+}
+
+
+//================================
+// Get attacker MAC address
+//================================
+String getAttackerMAC()
+{
+
+wifi_sta_list_t wifi_sta_list;
+tcpip_adapter_sta_list_t adapter_sta_list;
+
+esp_wifi_ap_get_sta_list(&wifi_sta_list);
+tcpip_adapter_get_sta_list(&wifi_sta_list,&adapter_sta_list);
+
+for(int i=0;i<adapter_sta_list.num;i++)
+{
+
+tcpip_adapter_sta_info_t station = adapter_sta_list.sta[i];
+
+IPAddress clientIP = IPAddress(station.ip.addr);
+
+if(clientIP == attackerIP)
+{
+
+char macStr[18];
+
+sprintf(macStr,"%02X:%02X:%02X:%02X:%02X:%02X",
+station.mac[0],
+station.mac[1],
+station.mac[2],
+station.mac[3],
+station.mac[4],
+station.mac[5]);
+
+return String(macStr);
+
+}
+
+}
+
+return "Unknown";
+
+}
+
+
+//================================
+// Send Telegram Alert
+//================================
+void sendTelegram(String attackType)
+{
+
+String mac = getAttackerMAC();
+
+String msg;
+
+msg = "🚨 FPGA ML FIREWALL ALERT 🚨\n\n";
+msg += "Attack Type: " + attackType + "\n\n";
+msg += "Attacker MAC:\n";
+msg += mac;
+
+bot.sendMessage(CHAT_ID,msg,"");
+
+}
+
+
+//================================
+// Read FPGA classification
+//================================
+void readFPGA()
+{
+
+unsigned long start = millis();
+
+while(!Serial2.available())
+{
+if(millis()-start > 500) return;
+}
+
+int r = Serial2.read();
+
+switch(r)
+{
+
+case 0:
+result = "NORMAL TRAFFIC";
+break;
+
+case 1:
+result = "DOS ATTACK";
+sendTelegram("DOS");
+break;
+
+case 2:
+result = "PORTSCAN ATTACK";
+sendTelegram("PORTSCAN");
+break;
+
+case 3:
+result = "BRUTEFORCE ATTACK";
+sendTelegram("BRUTEFORCE");
+break;
+
+default:
+result = "UNKNOWN RESULT";
+
+}
+
+}
+
+
+//================================
+// Button handlers
+//================================
+void normal()
+{
+
+attackerIP = server.client().remoteIP();
+
+sendPacket(80,2,2,60,40,2,2);
+
+readFPGA();
+
+server.send(200,"text/html",webpage());
+
+}
+
+
+void dos()
+{
+
+attackerIP = server.client().remoteIP();
+
+sendPacket(6,2,1,200,900,300,200);
+
+readFPGA();
+
+server.send(200,"text/html",webpage());
+
+}
+
+
+void portscan()
+{
+
+attackerIP = server.client().remoteIP();
+
+sendPacket(6,2,0,30,40,30,1);
+
+readFPGA();
+
+server.send(200,"text/html",webpage());
+
+}
+
+
+void bruteforce()
+{
+
+attackerIP = server.client().remoteIP();
+
+sendPacket(6,6,20,100,120,15,20);
+
+readFPGA();
+
+server.send(200,"text/html",webpage());
+
+}
+
+
+//================================
+// Webpage UI
+//================================
+String webpage()
+{
+
+String page="";
+
+page += "<html><head>";
+
+page += "<style>";
+
+page += "body{background:white;font-family:Arial;text-align:center;margin-top:40px;}";
+
+page += "h1{color:#2c3e50;}";
+
+page += ".result{font-size:30px;color:#2980b9;margin:20px;}";
+
+page += "button{width:260px;height:60px;font-size:20px;margin:10px;border-radius:10px;border:none;}";
+
+page += ".normal{background:#2ecc71;color:white;}";
+
+page += ".dos{background:#e74c3c;color:white;}";
+
+page += ".scan{background:#f39c12;color:white;}";
+
+page += ".brute{background:#8e44ad;color:white;}";
+
+page += "</style>";
+
+page += "</head><body>";
+
+page += "<h1>FPGA Machine Learning Firewall</h1>";
+
+page += "<h2>Detection Result</h2>";
+
+page += "<div class='result'>" + result + "</div>";
+
+page += "<br>";
+
+page += "<a href='/normal'><button class='normal'>NORMAL TRAFFIC</button></a><br>";
+
+page += "<a href='/dos'><button class='dos'>DOS ATTACK</button></a><br>";
+
+page += "<a href='/scan'><button class='scan'>PORTSCAN</button></a><br>";
+
+page += "<a href='/brute'><button class='brute'>BRUTEFORCE</button></a>";
+
+page += "</body></html>";
+
+return page;
+
+}
+
+
+//================================
+void root()
+{
+server.send(200,"text/html",webpage());
+}
+
+
+//================================
+void setup()
+{
+
+Serial.begin(115200);
+
+Serial2.begin(115200,SERIAL_8N1,RXD2,TXD2);
+
+client.setInsecure();
+
+// Enable AP + STA
+WiFi.mode(WIFI_AP_STA);
+
+// Connect to Internet
+Serial.println("Connecting to Internet...");
+WiFi.begin(internetSSID,internetPASS);
+
+while(WiFi.status()!=WL_CONNECTED)
+{
+delay(500);
+Serial.print(".");
+}
+
+Serial.println("\nInternet Connected");
+
+// Start Firewall Router
+WiFi.softAP(ssid,password);
+
+Serial.println("Firewall started");
+Serial.print("Router IP: ");
+Serial.println(WiFi.softAPIP());
+
+server.on("/",root);
+
+server.on("/normal",normal);
+server.on("/dos",dos);
+server.on("/scan",portscan);
+server.on("/brute",bruteforce);
+
+server.begin();
+
+}
+
+
+//================================
+void loop()
+{
+server.handleClient();
+}
