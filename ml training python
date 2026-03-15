@@ -1,0 +1,204 @@
+# ==========================================================
+# FPGA ML FIREWALL TRAINING
+# Features: proto dur sbytes dbytes spkts dpkts state
+# Attacks: Normal, DoS, Reconnaissance, BruteForce
+# ==========================================================
+
+import pandas as pd
+import numpy as np
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import accuracy_score, confusion_matrix
+
+from sklearn.tree import DecisionTreeClassifier, export_text
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.naive_bayes import GaussianNB
+from sklearn.neighbors import KNeighborsClassifier
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+
+# ==========================================================
+# LOAD DATASET
+# ==========================================================
+
+train_df = pd.read_csv("UNSW_NB15_training-set.csv")
+test_df  = pd.read_csv("UNSW_NB15_testing-set.csv")
+
+df = pd.concat([train_df, test_df], ignore_index=True)
+
+print("Dataset loaded:", df.shape)
+
+
+# ==========================================================
+# MAP EXPLOITS → BRUTE FORCE
+# ==========================================================
+
+df["attack_cat"] = df["attack_cat"].replace({
+    "Exploits":"BruteForce"
+})
+
+
+# ==========================================================
+# KEEP ONLY REQUIRED ATTACK TYPES
+# ==========================================================
+
+selected_attacks = [
+    "Normal",
+    "DoS",
+    "Reconnaissance",
+    "BruteForce"
+]
+
+df = df[df["attack_cat"].isin(selected_attacks)]
+
+print("Filtered dataset:", df.shape)
+
+
+# ==========================================================
+# ENCODE CATEGORICAL FEATURES
+# ==========================================================
+
+proto_enc = LabelEncoder()
+state_enc = LabelEncoder()
+attack_enc = LabelEncoder()
+
+df["proto"] = proto_enc.fit_transform(df["proto"])
+df["state"] = state_enc.fit_transform(df["state"])
+df["attack_cat"] = attack_enc.fit_transform(df["attack_cat"])
+
+print("\nAttack Mapping:")
+print(dict(zip(attack_enc.classes_,
+               attack_enc.transform(attack_enc.classes_))))
+
+
+# ==========================================================
+# SELECT FEATURES
+# ==========================================================
+
+features = [
+    "proto",
+    "dur",
+    "sbytes",
+    "dbytes",
+    "spkts",
+    "dpkts",
+    "state"
+]
+
+X = df[features]
+y = df["attack_cat"]
+
+
+# ==========================================================
+# TRAIN TEST SPLIT
+# ==========================================================
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X,
+    y,
+    test_size=0.25,
+    random_state=42
+)
+
+
+# ==========================================================
+# DEFINE ML MODELS
+# ==========================================================
+
+models = {
+
+    "Decision Tree": DecisionTreeClassifier(max_depth=6),
+
+    "Random Forest": RandomForestClassifier(
+        n_estimators=60
+    ),
+
+    "Naive Bayes": GaussianNB(),
+
+    "KNN": KNeighborsClassifier(
+        n_neighbors=5
+    )
+}
+
+
+best_model = None
+best_accuracy = 0
+best_name = ""
+
+
+# ==========================================================
+# TRAIN MODELS + CONFUSION MATRIX
+# ==========================================================
+
+for name, model in models.items():
+
+    print("\n================================")
+    print("Training:", name)
+    print("================================")
+
+    model.fit(X_train, y_train)
+
+    pred = model.predict(X_test)
+
+    acc = accuracy_score(y_test, pred)
+
+    print("Accuracy:", acc)
+
+    cm = confusion_matrix(y_test, pred)
+
+    plt.figure(figsize=(5,4))
+    sns.heatmap(cm,
+                annot=True,
+                fmt="d",
+                cmap="Blues")
+
+    plt.title(name + " Confusion Matrix")
+    plt.xlabel("Predicted")
+    plt.ylabel("Actual")
+
+    plt.show()
+
+    if acc > best_accuracy:
+        best_accuracy = acc
+        best_model = model
+        best_name = name
+
+
+# ==========================================================
+# BEST MODEL
+# ==========================================================
+
+print("\n================================")
+print("BEST MODEL:", best_name)
+print("BEST ACCURACY:", best_accuracy)
+print("================================")
+
+
+# ==========================================================
+# EXPORT DECISION TREE RULES
+# ==========================================================
+
+print("\nExporting Decision Tree rules for FPGA...")
+
+dt = DecisionTreeClassifier(max_depth=6)
+
+dt.fit(X_train, y_train)
+
+rules = export_text(dt,
+                    feature_names=features)
+
+with open("firewall_rules.txt","w") as f:
+    f.write(rules)
+
+print("Rules saved to firewall_rules.txt")
+
+
+# ==========================================================
+# DOWNLOAD FILE
+# ==========================================================
+
+from google.colab import files
+files.download("firewall_rules.txt")
